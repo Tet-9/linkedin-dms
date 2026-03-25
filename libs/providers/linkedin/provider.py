@@ -49,6 +49,7 @@ _MAX_PAGES = 50
 _DELAY_BETWEEN_PAGES_S = 1.5
 _RETRY_MAX_ATTEMPTS = 3
 _RETRY_BASE_DELAY_S = 2.0
+_RATE_LIMIT_MAX_ATTEMPTS = 6
 _RETRYABLE_STATUS_CODES = frozenset({429, 999, 500, 502, 503, 504})
 _RATE_LIMIT_STATUS_CODES = frozenset({429, 999})
 _PLAYWRIGHT_NAV_RETRIES = 2
@@ -325,9 +326,16 @@ class LinkedInProvider:
     - Do NOT implement CAPTCHA/2FA bypass.
     """
 
-    def __init__(self, *, auth: AccountAuth, proxy: Optional[ProxyConfig] = None):
+    def __init__(
+        self,
+        *,
+        auth: AccountAuth,
+        proxy: Optional[ProxyConfig] = None,
+        account_id: Optional[int] = None,
+    ):
         self.auth = auth
         self.proxy = proxy
+        self._account_id = account_id
         # send_message state (upstream)
         self._sent_keys: dict[str, str] = {}
         self._last_send_ts: float = 0.0
@@ -450,11 +458,28 @@ class LinkedInProvider:
         return self._profile_id
 
     def _get_with_retry(self, client: httpx.Client, url: str, **kwargs: Any) -> httpx.Response:
-        last_exc: Optional[httpx.HTTPStatusError] = None
-        for attempt in range(_RETRY_MAX_ATTEMPTS):
-            resp = client.get(url, **kwargs)
+        acct = self._account_id or "[unknown]"
+        network_failures = 0
+        rate_limit_attempts = 0
+        server_error_attempts = 0
 
-            # 401 → fail fast, session is dead.
+        while True:
+            try:
+                resp = client.get(url, **kwargs)
+            except (httpx.NetworkError, httpx.TimeoutException) as exc:
+                network_failures += 1
+                if network_failures >= _MAX_NETWORK_RETRIES:
+                    raise ConnectionError(
+                        f"GET failed after {network_failures} network retries"
+                    ) from exc
+                logger.warning(
+                    "Network error, account_id=%s, attempt %d/%d, retrying in %.0fs",
+                    acct, network_failures, _MAX_NETWORK_RETRIES,
+                    _NETWORK_RETRY_DELAY_S,
+                )
+                time.sleep(_NETWORK_RETRY_DELAY_S)
+                continue
+
             if resp.status_code == 401:
                 raise PermissionError(
                     "LinkedIn session expired (HTTP 401). Re-authenticate."
@@ -462,43 +487,44 @@ class LinkedInProvider:
 
             if resp.status_code not in _RETRYABLE_STATUS_CODES:
                 return resp
-            last_exc = httpx.HTTPStatusError(
-                str(resp.status_code), request=resp.request, response=resp,
-            )
-            if attempt == _RETRY_MAX_ATTEMPTS - 1:
-                break
 
             is_rate_limit = resp.status_code in _RATE_LIMIT_STATUS_CODES
             if is_rate_limit:
+                rate_limit_attempts += 1
                 self.rate_limit_encountered = True
+                if rate_limit_attempts >= _RATE_LIMIT_MAX_ATTEMPTS:
+                    raise httpx.HTTPStatusError(
+                        str(resp.status_code), request=resp.request, response=resp,
+                    )
                 delay = min(
-                    _BACKOFF_START_S * (2 ** attempt), _BACKOFF_MAX_S,
+                    _BACKOFF_START_S * (2 ** (rate_limit_attempts - 1)),
+                    _BACKOFF_MAX_S,
                 )
-            else:
-                delay = _RETRY_BASE_DELAY_S * (2 ** attempt)
-
-            if is_rate_limit:
                 retry_after = resp.headers.get("Retry-After")
                 if retry_after:
                     try:
                         delay = max(delay, float(retry_after))
                     except (TypeError, ValueError):
                         pass
+                logger.warning(
+                    "Rate-limit: HTTP %d, account_id=%s, attempt %d/%d, backoff %.1fs",
+                    resp.status_code, acct,
+                    rate_limit_attempts, _RATE_LIMIT_MAX_ATTEMPTS, delay,
+                )
+            else:
+                server_error_attempts += 1
+                if server_error_attempts >= _RETRY_MAX_ATTEMPTS:
+                    raise httpx.HTTPStatusError(
+                        str(resp.status_code), request=resp.request, response=resp,
+                    )
+                delay = _RETRY_BASE_DELAY_S * (2 ** (server_error_attempts - 1))
+                logger.warning(
+                    "Server error: HTTP %d, account_id=%s, attempt %d/%d, retry in %.1fs",
+                    resp.status_code, acct,
+                    server_error_attempts, _RETRY_MAX_ATTEMPTS, delay,
+                )
 
-            logger.warning(
-                "Rate-limit/retry: HTTP %d, account=%s, attempt %d/%d, backoff %.1fs",
-                resp.status_code,
-                "[redacted]",
-                attempt + 1,
-                _RETRY_MAX_ATTEMPTS,
-                delay,
-            )
             time.sleep(delay)
-
-        # Final attempt also rate-limited — set the flag.
-        if last_exc is not None and last_exc.response.status_code in _RATE_LIMIT_STATUS_CODES:
-            self.rate_limit_encountered = True
-        raise last_exc  # type: ignore[misc]
 
     def _is_cf_blocked(self, resp: httpx.Response) -> bool:
         if resp.status_code in (302, 303):
@@ -780,7 +806,8 @@ class LinkedInProvider:
                         f"Send failed after {network_failures} network retries"
                     ) from exc
                 logger.warning(
-                    "Network error (attempt %d/%d), retrying in %.0fs",
+                    "Network error, account_id=%s, attempt %d/%d, retrying in %.0fs",
+                    self._account_id or "[unknown]",
                     network_failures,
                     _MAX_NETWORK_RETRIES,
                     _NETWORK_RETRY_DELAY_S,
@@ -799,8 +826,9 @@ class LinkedInProvider:
                     _BACKOFF_START_S * (2 ** (rate_limit_hits - 1)), _BACKOFF_MAX_S
                 )
                 logger.warning(
-                    "Rate limited (HTTP %d, attempt %d/%d), backing off %.0fs",
+                    "Rate-limit: HTTP %d, account_id=%s, attempt %d/%d, backoff %.0fs",
                     resp.status_code,
+                    self._account_id or "[unknown]",
                     rate_limit_hits,
                     _MAX_RATE_LIMIT_RETRIES,
                     backoff,

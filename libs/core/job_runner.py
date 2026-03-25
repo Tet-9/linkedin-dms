@@ -25,6 +25,7 @@ class SyncConfig:
     """Configurable delays for safe sync under LinkedIn's anti-bot limits."""
     delay_between_threads_s: float = 2.0
     delay_between_pages_s: float = 1.5
+    # Reserved for future multi-account batch sync (not yet wired).
     delay_between_accounts_s: float = 5.0
 
 
@@ -110,6 +111,11 @@ def run_sync(
             cursor = next_cursor
             time.sleep(cfg.delay_between_pages_s)
         synced_threads += 1
+    if provider.rate_limit_encountered:
+        logger.warning(
+            "sync: rate-limit encountered during sync (account_id=%d)",
+            account_id,
+        )
     return SyncResult(
         synced_threads=synced_threads,
         messages_inserted=messages_inserted,

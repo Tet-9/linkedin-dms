@@ -143,7 +143,7 @@ def _load_provider(storage: Storage, account_id: int) -> LinkedInProvider | int:
     except ValueError as exc:
         _stderr(f"error: {exc}")
         return 1
-    return LinkedInProvider(auth=auth, proxy=proxy)
+    return LinkedInProvider(auth=auth, proxy=proxy, account_id=account_id)
 
 
 def _cmd_sync(storage: Storage, args: argparse.Namespace) -> int:

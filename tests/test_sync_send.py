@@ -285,20 +285,62 @@ def test_run_sync_rate_limited_flag_propagated(storage, account_id):
 
 
 def test_run_sync_respects_sync_config_delays(storage, account_id):
-    """SyncConfig is accepted and doesn't break the sync."""
+    """SyncConfig delays are forwarded to time.sleep between threads and pages."""
+    from unittest.mock import patch, call
+
+    t1 = LinkedInThread(platform_thread_id="c1", title=None, raw=None)
+    t2 = LinkedInThread(platform_thread_id="c2", title=None, raw=None)
+    msg = LinkedInMessage(
+        platform_message_id="m1",
+        direction="in",
+        sender=None,
+        text="x",
+        sent_at=datetime.now(timezone.utc),
+        raw=None,
+    )
+    provider = _mock_provider()
+    provider.list_threads.return_value = [t1, t2]
+    provider.fetch_messages.side_effect = [
+        ([msg], "next"),
+        ([], None),
+        ([], None),
+    ]
+    cfg = SyncConfig(delay_between_threads_s=3.5, delay_between_pages_s=1.0)
+
+    with patch("libs.core.job_runner.time.sleep") as mock_sleep:
+        result = run_sync(
+            account_id=account_id,
+            storage=storage,
+            provider=provider,
+            limit_per_thread=50,
+            max_pages_per_thread=None,
+            sync_config=cfg,
+        )
+
+    assert result.synced_threads == 2
+    sleep_calls = [c.args[0] for c in mock_sleep.call_args_list]
+    assert 3.5 in sleep_calls
+    assert 1.0 in sleep_calls
+
+
+def test_run_sync_logs_rate_limit_warning(storage, account_id, caplog):
+    """When provider signals rate-limit, run_sync logs a warning with account_id."""
+    import logging
+
     provider = _mock_provider()
     provider.list_threads.return_value = []
-    cfg = SyncConfig(delay_between_threads_s=0.0, delay_between_pages_s=0.0)
+    provider.rate_limit_encountered = True
 
-    result = run_sync(
-        account_id=account_id,
-        storage=storage,
-        provider=provider,
-        limit_per_thread=50,
-        sync_config=cfg,
-    )
-    assert result.synced_threads == 0
-    assert result.rate_limited is False
+    with caplog.at_level(logging.WARNING, logger="libs.core.job_runner"):
+        result = run_sync(
+            account_id=account_id,
+            storage=storage,
+            provider=provider,
+            limit_per_thread=50,
+        )
+    assert result.rate_limited is True
+    assert any("rate-limit" in r.message.lower() for r in caplog.records)
+    assert any(str(account_id) in r.message for r in caplog.records)
 
 
 def test_run_send_returns_platform_message_id(storage, account_id):

@@ -157,7 +157,7 @@ def sync_account(body: SyncIn):
         proxy = storage.get_account_proxy(body.account_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=redact_string(str(e))) from e
-    provider = LinkedInProvider(auth=auth, proxy=proxy)
+    provider = LinkedInProvider(auth=auth, proxy=proxy, account_id=body.account_id)
     sync_config = SyncConfig(
         delay_between_threads_s=body.delay_between_threads_s,
         delay_between_pages_s=body.delay_between_pages_s,
@@ -203,7 +203,7 @@ def send_message(body: SendIn):
         proxy = storage.get_account_proxy(body.account_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=redact_string(str(e))) from e
-    provider = LinkedInProvider(auth=auth, proxy=proxy)
+    provider = LinkedInProvider(auth=auth, proxy=proxy, account_id=body.account_id)
     try:
         platform_message_id = run_send(
             account_id=body.account_id,
