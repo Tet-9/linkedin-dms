@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 import httpx
 
-from libs.core.models import AccountAuth, ProxyConfig
+from libs.core.models import AccountAuth, BrowserHeaders, ProxyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -327,12 +327,13 @@ class LinkedInProvider:
     """
 
     def __init__(
-        self,
-        *,
-        auth: AccountAuth,
-        proxy: Optional[ProxyConfig] = None,
-        account_id: Optional[int] = None,
-    ):
+    self,
+    *,
+    auth: AccountAuth,
+    proxy: Optional[ProxyConfig] = None,
+    account_id: Optional[int] = None,
+    browser_headers: Optional[BrowserHeaders] = None,
+):
         self.auth = auth
         self.proxy = proxy
         self._account_id = account_id
@@ -345,6 +346,7 @@ class LinkedInProvider:
         self._browser_cookies: Optional[dict[str, str]] = None
         self._profile_id: Optional[str] = None
         self._profile_id_fetched: bool = False
+        self._browser_headers: Optional[BrowserHeaders] = browser_headers
 
     # ------------------------------------------------------------------
     # Shared helpers — send_message (upstream)
@@ -393,29 +395,35 @@ class LinkedInProvider:
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
-    def _build_graphql_headers(self) -> dict[str, str]:
-        if not self.auth.jsessionid or not self.auth.jsessionid.strip():
-            raise ValueError("JSESSIONID cookie required for Voyager API (CSRF)")
-        return {
-            "User-Agent": _BROWSER_USER_AGENT,
-            "Accept": "application/graphql",
-            "x-restli-protocol-version": "2.0.0",
-            "x-li-track": json.dumps({
-                "clientVersion": "1.13.42912",
-                "mpVersion": "1.13.42912",
-                "osName": "web",
-                "timezoneOffset": 0,
-                "deviceFormFactor": "DESKTOP",
-                "mpName": "voyager-web",
-            }),
-            "x-li-page-instance": "urn:li:page:d_flagship3_messaging",
-            "x-li-lang": "en_US",
-            "csrf-token": self.auth.jsessionid,
-            "referer": _MESSAGING_PAGE_URL,
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "same-origin",
-        }
+ def _build_graphql_headers(self) -> dict[str, str]:
+    if not self.auth.jsessionid or not self.auth.jsessionid.strip():
+        raise ValueError("JSESSIONID cookie required for Voyager API (CSRF)")
+    bh = self._browser_headers
+    user_agent = bh.user_agent if bh and bh.user_agent else _BROWSER_USER_AGENT
+    x_li_track = bh.x_li_track if bh and bh.x_li_track else json.dumps({
+        "clientVersion": "1.13.42912",
+        "mpVersion": "1.13.42912",
+        "osName": "web",
+        "timezoneOffset": 0,
+        "deviceFormFactor": "DESKTOP",
+        "mpName": "voyager-web",
+    })
+    x_li_page_instance = bh.x_li_page_instance if bh and bh.x_li_page_instance else "urn:li:page:d_flagship3_messaging"
+    x_li_lang = bh.x_li_lang if bh and bh.x_li_lang else "en_US"
+    csrf_token = bh.csrf_token if bh and bh.csrf_token else self.auth.jsessionid
+    return {
+        "User-Agent": user_agent,
+        "Accept": "application/graphql",
+        "x-restli-protocol-version": "2.0.0",
+        "x-li-track": x_li_track,
+        "x-li-page-instance": x_li_page_instance,
+        "x-li-lang": x_li_lang,
+        "csrf-token": csrf_token,
+        "referer": _MESSAGING_PAGE_URL,
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+    }
 
     def _build_basic_cookies(self) -> dict[str, str]:
         return self._get_cookies()
