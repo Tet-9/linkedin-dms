@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from libs.core.cookies import cookies_to_account_auth, validate_li_at
 from libs.core.job_runner import run_send, run_sync, SendResult, SyncConfig, SyncResult
-from libs.core.models import AccountAuth, ProxyConfig
+from libs.core.models import AccountAuth, BrowserHeaders, ProxyConfig
 from libs.core.redaction import configure_logging, redact_for_log, redact_string
 from libs.core.storage import Storage
 from libs.providers.linkedin.provider import LinkedInProvider
@@ -93,7 +93,10 @@ class SyncIn(BaseModel):
     delay_between_pages_s: float = Field(
         1.5, ge=0, le=60, description="Seconds to pause between fetch_messages pages",
     )
-
+    browser_headers: Optional[BrowserHeaders] = Field(
+        None,
+        description="Real browser headers captured by the Chrome extension to prevent session invalidation",
+    )
 
 @app.get("/health")
 def health():
@@ -157,7 +160,7 @@ def sync_account(body: SyncIn):
         proxy = storage.get_account_proxy(body.account_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=redact_string(str(e))) from e
-    provider = LinkedInProvider(auth=auth, proxy=proxy, account_id=body.account_id)
+    provider = LinkedInProvider(auth=auth, proxy=proxy, account_id=body.account_id, browser_headers=body.browser_headers)
     sync_config = SyncConfig(
         delay_between_threads_s=body.delay_between_threads_s,
         delay_between_pages_s=body.delay_between_pages_s,
