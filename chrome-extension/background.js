@@ -157,8 +157,16 @@ async function handleManualSync() {
   const resp = await fetch(`${config.serviceUrl}/sync`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ account_id: config.accountId }),
-  });
+    body: JSON.stringify({
+  account_id: accountId,
+  browser_headers: {
+    user_agent: navigator.userAgent,
+    x_li_track: capturedXLiTrack || null,
+    csrf_token: capturedCsrfToken || null,
+    x_li_page_instance: capturedPageInstance || null,
+    x_li_lang: capturedLang || null,
+  }
+}),
 
   if (!resp.ok) {
     const detail = await resp.text();
