@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Optional
+from dataclasses import field
 
 
 @dataclass(frozen=True)
@@ -70,3 +71,17 @@ class Message:
     text: Optional[str]
     sent_at: datetime
     raw: Optional[dict[str, Any]] = None
+@dataclass
+class BrowserHeaders:
+    """Real browser request headers captured by the Chrome extension.
+
+    When provided, the LinkedIn provider uses these instead of hardcoded
+    synthetic values, preventing LinkedIn from detecting the fingerprint
+    mismatch that causes session invalidation.
+    All fields are optional — missing ones fall back to provider defaults.
+    """
+    user_agent: Optional[str] = None
+    x_li_track: Optional[str] = None
+    csrf_token: Optional[str] = None
+    x_li_page_instance: Optional[str] = None
+    x_li_lang: Optional[str] = None
